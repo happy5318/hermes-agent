@@ -314,10 +314,11 @@ def test_viking_client_headers_include_bearer_when_api_key_set():
     assert headers["Authorization"] == "Bearer test-key"
 
 
-def test_viking_client_headers_omit_tenant_when_legacy_default():
-    # Existing installs have account/user set to the literal string "default".
-    # Those should NOT be sent as headers — the server would interpret that
-    # as a real tenant override and reject/misroute requests.
+def test_viking_client_headers_sent_with_legacy_default():
+    # OpenViking 0.3.x requires tenant headers for ROOT API key requests.
+    # Even when account/user are the literal string "default", they MUST be
+    # sent as headers — the server derives tenancy differently for ROOT vs
+    # user keys, and omitting these headers with a ROOT key causes errors.
     client = _VikingClient(
         "https://example.com",
         api_key="test-key",
@@ -326,13 +327,17 @@ def test_viking_client_headers_omit_tenant_when_legacy_default():
         agent="hermes",
     )
     headers = client._headers()
-    assert "X-OpenViking-Account" not in headers
-    assert "X-OpenViking-User" not in headers
+    assert headers["X-OpenViking-Account"] == "default"
+    assert headers["X-OpenViking-User"] == "default"
     assert headers["X-OpenViking-Agent"] == "hermes"
     assert headers["Authorization"] == "Bearer test-key"
 
 
-def test_viking_client_headers_omit_tenant_when_empty():
+def test_viking_client_headers_sent_when_account_user_set_to_default():
+    # When constructor receives empty strings, they fallback to "default"
+    # via `or os.environ.get("OPENVIKING_ACCOUNT", "default")`.
+    # With the fix, these values ARE now sent as headers (required for ROOT key).
+    # This test verifies that behavior.
     client = _VikingClient(
         "https://example.com",
         api_key="",
@@ -341,8 +346,10 @@ def test_viking_client_headers_omit_tenant_when_empty():
         agent="hermes",
     )
     headers = client._headers()
-    assert "X-OpenViking-Account" not in headers
-    assert "X-OpenViking-User" not in headers
+    # Empty strings are converted to "default" by the constructor
+    assert headers["X-OpenViking-Account"] == "default"
+    assert headers["X-OpenViking-User"] == "default"
+    # No auth headers when api_key is empty
     assert "Authorization" not in headers
     assert "X-API-Key" not in headers
 
