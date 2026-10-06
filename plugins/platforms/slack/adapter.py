@@ -4978,8 +4978,17 @@ class SlackAdapter(BasePlatformAdapter):
         waiting agent thread — same mechanism as the text ``/approve`` flow."""
 
         def _build() -> Tuple[str, list]:
+            # The button value carries the session_key, plus the card's forwarded
+            # approval_request_id behind a unit-separator marker so a click resolves
+            # ITS queued entry, not the FIFO-oldest one (#124974). No id → the value
+            # is exactly the bare session_key, i.e. the legacy format.
+            from tools.approval import metadata_request_id
+            button_value = prompt.session_key
+            rid = metadata_request_id(prompt.metadata)
+            if rid:
+                button_value = f"{prompt.session_key}\x1frid={rid}"
             actions = [
-                self._button(label, self._EA_ACTION_IDS[choice], prompt.session_key, style=style)
+                self._button(label, self._EA_ACTION_IDS[choice], button_value, style=style)
                 for label, choice, style in prompt.actions]
             blocks = [
                 {"type": "section", "text": {"type": "mrkdwn", "text": prompt.text}},
@@ -5626,6 +5635,11 @@ class SlackAdapter(BasePlatformAdapter):
             return
         team_id, action_id, session_key, message, msg_ts, channel_id, user_name, user_id = started
         choice = self._APPROVAL_CHOICES.get(action_id, "deny")
+        # The button value may carry the card's forwarded approval_request_id behind a
+        # unit-separator marker (#124974) so a click resolves ITS queued entry instead of
+        # the FIFO-oldest one. A bare value (legacy card) splits to just the session_key.
+        session_key, _sep, request_id = (session_key or "").partition("\x1frid=")
+        request_id = request_id.strip() or None
         # Double-click guard (atomic pop). Also accept the bare ts: the approval may
         # have been stored without a team id while the click carries one.
         approval_key = self._workspace_message_marker(team_id, msg_ts)
@@ -5637,7 +5651,7 @@ class SlackAdapter(BasePlatformAdapter):
         # timeout (count == 0) shows "expired", not "approved".
         try:
             from tools.approval import resolve_gateway_approval
-            count = resolve_gateway_approval(session_key, choice)
+            count = resolve_gateway_approval(session_key, choice, request_id=request_id)
             logger.info(
                 "Slack button resolved %d approval(s) for session %s (choice=%s, user=%s)", count,
                 session_key, choice, user_name)

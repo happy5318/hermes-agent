@@ -5577,6 +5577,8 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
 
     async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
         """Send an approval with content as its canonical payload and an embed for state."""
+        from tools.approval import metadata_request_id
+
         def _build(_channel):
             content = prompt.text
             mention_content = self._approval_mention_content()
@@ -5593,6 +5595,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 allowed_role_ids=self._allowed_role_ids, require_admin=require_admin,
                 admin_user_ids=admin_user_ids, allow_permanent="always" in choices,
                 allow_session="session" in choices, smart_denied=prompt.smart_denied,
+                request_id=metadata_request_id(prompt.metadata),
             )
             send_kwargs: Dict[str, Any] = {"content": content, "embed": embed, "view": view}
             if mention_content:
@@ -6388,9 +6391,11 @@ def _define_discord_view_classes() -> None:
             self, session_key: str, allowed_user_ids: set, allowed_role_ids: Optional[set] = None,
             require_admin: bool = False, admin_user_ids: Optional[set] = None,
             allow_permanent: bool = True, allow_session: bool = True, smart_denied: bool = False,
+            request_id: Optional[str] = None,
         ):
             super().__init__(allowed_user_ids, allowed_role_ids, timeout=_read_discord_prompt_timeout())
             self.session_key = session_key
+            self.request_id = request_id  # the card's forwarded approval_request_id (#124974)
             self.require_admin = require_admin
             self.admin_user_ids = {str(a).strip() for a in (admin_user_ids or set()) if str(a).strip()}
             self._localize_buttons(
@@ -6439,7 +6444,8 @@ def _define_discord_view_classes() -> None:
             # wait timed out (count == 0) must not claim "Approved".
             try:
                 from tools.approval import resolve_gateway_approval
-                count = resolve_gateway_approval(self.session_key, choice)
+                count = resolve_gateway_approval(self.session_key, choice,
+                                                 request_id=getattr(self, "request_id", None))
                 logger.info(
                     "Discord button resolved %d approval(s) for session %s (choice=%s, user=%s)",
                     count, self.session_key, choice, interaction.user.display_name,
